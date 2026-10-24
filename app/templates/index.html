@@ -1,0 +1,212 @@
+from __future__ import annotations
+
+from typing import Any, Dict, Optional
+
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from .models import Customer, Depot, Pallet, Rack, Section, Slot
+
+
+def initialize_default_data(db: Session) -> None:
+    if db.query(Depot).count() == 0:
+        depot = Depot(
+            name="Dépôt principal",
+            location="Zone Nord",
+            floors_count=3,
+            racks_count=4,
+            slots_per_floor=10,
+            slot_width=1.2,
+            slot_depth=1.0,
+            description="Dépôt de stockage principal avec secteurs carton, partagés et clients.",
+        )
+        db.add(depot)
+        db.commit()
+        db.refresh(depot)
+
+        section_carton = Section(
+            depot_id=depot.id,
+            name="Secteur Carton A",
+            section_type="carton",
+            description="Zone de stockage pour cartons et petits colis.",
+        )
+        section_partage = Section(
+            depot_id=depot.id,
+            name="Secteur Partagé",
+            section_type="shared",
+            description="Stockage partagé avec partenaires et clients.",
+        )
+        db.add_all([section_carton, section_partage])
+        db.commit()
+
+        client_1 = Customer(
+            depot_id=depot.id,
+            name="Client A",
+            company_name="Alpha Logistics",
+            contact="+33 6 00 00 00 01",
+            notes="Client prioritaire",
+        )
+        client_2 = Customer(
+            depot_id=depot.id,
+            name="Client B",
+            company_name="Beta Transport",
+            contact="+33 6 00 00 00 02",
+            is_partner=True,
+        )
+        db.add_all([client_1, client_2])
+        db.commit()
+
+        rack1 = Rack(
+            depot_id=depot.id,
+            section_id=section_carton.id,
+            name="Paletier A1",
+            floors_count=3,
+            slots_per_floor=6,
+            width=1.2,
+            depth=1.0,
+        )
+        rack2 = Rack(
+            depot_id=depot.id,
+            section_id=section_partage.id,
+            name="Paletier Partagé P1",
+            floors_count=2,
+            slots_per_floor=5,
+            width=1.5,
+            depth=1.2,
+        )
+        db.add_all([rack1, rack2])
+        db.commit()
+
+        for rack in [rack1, rack2]:
+            for floor in range(1, rack.floors_count + 1):
+                for slot_nr in range(1, rack.slots_per_floor + 1):
+                    db.add(Slot(rack_id=rack.id, floor_number=floor, slot_number=slot_nr))
+        db.commit()
+
+
+def get_depot_or_404(db: Session, depot_id: int) -> Depot:
+    depot = db.query(Depot).filter(Depot.id == depot_id).first()
+    if depot is None:
+        raise ValueError("Dépot introuvable")
+    return depot
+
+
+def create_depot(db: Session, data: Dict[str, Any]) -> Depot:
+    depot = Depot(**data)
+    db.add(depot)
+    db.commit()
+    db.refresh(depot)
+    return depot
+
+
+def update_depot(db: Session, depot_id: int, data: Dict[str, Any]) -> Depot:
+    depot = get_depot_or_404(db, depot_id)
+    for key, value in data.items():
+        if value is not None:
+            setattr(depot, key, value)
+    db.commit()
+    db.refresh(depot)
+    return depot
+
+
+def create_section(db: Session, depot_id: int, payload: Dict[str, Any]) -> Section:
+    section = Section(depot_id=depot_id, **payload)
+    db.add(section)
+    db.commit()
+    db.refresh(section)
+    return section
+
+
+def create_customer(db: Session, depot_id: int, payload: Dict[str, Any]) -> Customer:
+    customer = Customer(depot_id=depot_id, **payload)
+    db.add(customer)
+    db.commit()
+    db.refresh(customer)
+    return customer
+
+
+def create_rack(db: Session, depot_id: int, payload: Dict[str, Any]) -> Rack:
+    rack = Rack(depot_id=depot_id, **payload)
+    db.add(rack)
+    db.commit()
+    db.refresh(rack)
+
+    for floor in range(1, rack.floors_count + 1):
+        for slot_nr in range(1, rack.slots_per_floor + 1):
+            db.add(Slot(rack_id=rack.id, floor_number=floor, slot_number=slot_nr))
+    db.commit()
+    db.refresh(rack)
+    return rack
+
+
+def delete_rack(db: Session, rack_id: int) -> bool:
+    rack = db.query(Rack).filter(Rack.id == rack_id).first()
+    if not rack:
+        return False
+    db.delete(rack)
+    db.commit()
+    return True
+
+
+def create_pallet_for_slot(db: Session, payload: Dict[str, Any]) -> Pallet:
+    slot = db.query(Slot).filter(Slot.id == payload["slot_id"]).first()
+    if not slot:
+        raise ValueError("Emplacement introuvable")
+
+    pallet = Pallet(**payload)
+    db.add(pallet)
+    db.commit()
+    db.refresh(pallet)
+
+    slot.status = "occupied_our" if not payload.get("is_shared") else "shared"
+    if payload.get("customer_id"):
+        slot.status = "occupied_customer"
+    db.commit()
+    db.refresh(slot)
+    return pallet
+
+
+def update_pallet(db: Session, pallet_id: int, payload: Dict[str, Any]) -> Pallet:
+    pallet = db.query(Pallet).filter(Pallet.id == pallet_id).first()
+    if not pallet:
+        raise ValueError("Palette introuvable")
+
+    for key, value in payload.items():
+        if value is not None:
+            setattr(pallet, key, value)
+    db.commit()
+    db.refresh(pallet)
+
+    if pallet.slot_id:
+        slot = db.query(Slot).filter(Slot.id == pallet.slot_id).first()
+        if slot:
+            slot.status = "shared" if pallet.is_shared else "occupied_our"
+            if pallet.customer_id:
+                slot.status = "occupied_customer"
+            db.commit()
+    return pallet
+
+
+def get_dashboard(db: Session) -> Dict[str, Any]:
+    depots_count = db.query(Depot).count()
+    racks_count = db.query(Rack).count()
+    sections_count = db.query(Section).count()
+    customers_count = db.query(Customer).count()
+    pallets_count = db.query(Pallet).count()
+
+    free_slots = db.query(Slot).filter(Slot.status == "free").count()
+    occupied_our = db.query(Slot).filter(Slot.status == "occupied_our").count()
+    occupied_customer = db.query(Slot).filter(Slot.status == "occupied_customer").count()
+    shared_slots = db.query(Slot).filter(Slot.status == "shared").count()
+
+    return {
+        "depots_count": depots_count,
+        "racks_count": racks_count,
+        "sections_count": sections_count,
+        "customers_count": customers_count,
+        "pallets_count": pallets_count,
+        "free_slots": free_slots,
+        "occupied_our": occupied_our,
+        "occupied_customer": occupied_customer,
+        "shared_slots": shared_slots,
+    }
