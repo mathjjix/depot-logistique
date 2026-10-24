@@ -12,16 +12,17 @@ Ce projet est une application Python avec FastAPI pour gérer un dépôt logisti
 
 ## Stack
 
-- Python 3.11+
+- Python 3.15.1+
 - FastAPI
 - SQLAlchemy + SQLite
 - Jinja2 pour l'interface web
 
 ## Démarrage rapide
 
-```bash
+```powershell
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
@@ -67,3 +68,8 @@ app/
 ## Notes
 
 L'application garde les données dans une base SQLite locale `warehouse.db`.
+
+## Compatibilité Python 3.15.1
+
+Le problème venait de la dépendance `uvicorn[standard]`, qui chargeait `PyYAML` et provoquait une erreur de compilation sur Python 3.15.1 sous Windows.
+La version actuelle du projet utilise `uvicorn` sans l'extension `standard`, ce qui évite ce point bloquant tout en gardant le serveur fonctionnel.
